@@ -1,8 +1,4 @@
 import streamlit as st
-
-# ตั้งค่าเพจ ต้องอยู่ก่อนเรียกใช้งาน streamlit ใดๆ
-st.set_page_config(page_title="Combined Trade Dashboard", layout="wide")
-
 import pandas as pd
 from binance.client import Client
 from dotenv import load_dotenv
@@ -15,49 +11,62 @@ import requests
 import hmac
 import hashlib
 
-# ------ Dark mode style ------
+# ตั้งค่าเพจ (ต้องตั้งก่อนเรียกใช้งาน streamlit อื่นๆ)
+st.set_page_config(page_title="Combined Trade Dashboard", layout="wide")
+
+# ------ Dark mode & responsive style ------
 dark_mode_css = """
 <style>
-    /* Dark background & font */
+    /* Background and text */
     .reportview-container {
         background-color: #0E1117;
         color: white;
     }
-    /* Headers */
     h1, h2, h3, h4 {
-        color: #FFFFFF;
+        color: white;
     }
-    /* DataFrame headers */
+    /* Table header */
     .css-1d391kg th {
         background-color: #262730 !important;
         color: white !important;
     }
-    /* DataFrame rows */
+    /* Table rows */
     .css-1d391kg td {
         background-color: #1A1D26 !important;
         color: white !important;
     }
-    /* Metric box */
+    /* Metric boxes */
     .stMetric > div {
         background-color: #1A1D26;
         border-radius: 10px;
         padding: 10px;
         color: white;
     }
+
+    /* Responsive tweaks */
+    @media (max-width: 768px) {
+        .stMetric > div {
+            font-size: 14px;
+            padding: 6px;
+        }
+        h1, h2, h3 {
+            font-size: 18px;
+        }
+    }
 </style>
 """
 st.markdown(dark_mode_css, unsafe_allow_html=True)
 
-# โหลด API Binance จากไฟล์ .env
+# โหลด API key จาก .env
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 client = Client(API_KEY, API_SECRET)
 
-# สร้าง Tab 2 แท็บ
+# สร้าง 2 tabs
 tab1, tab2 = st.tabs(["BTC/USDT Trades", "USDT/THB Trades"])
 
-# --- Tab 1: BTC/USDT Trade Dashboard ---
+# ---------- Tab 1: BTC/USDT Dashboard ----------
 with tab1:
     st.title("💹 BTC/USDT Trade Dashboard")
 
@@ -75,10 +84,11 @@ with tab1:
 
     current_price = show_live_price()
 
-    # ดึงข้อมูลการเทรด
+    # ดึงข้อมูลการเทรด BTCUSDT
     try:
         trades = client.get_my_trades(symbol="BTCUSDT")
         df = pd.DataFrame(trades)
+
         if df.empty:
             st.info("❗ ไม่มีประวัติการเทรด BTCUSDT")
             st.stop()
@@ -86,14 +96,19 @@ with tab1:
         bangkok_tz = pytz.timezone("Asia/Bangkok")
         df["time"] = pd.to_datetime(df["time"], unit="ms", utc=True).dt.tz_convert(bangkok_tz).dt.tz_localize(None)
 
+        # แปลงข้อมูลชนิดตัวเลข
         df["price"] = df["price"].astype(float)
         df["qty"] = df["qty"].astype(float)
         df["quoteQty"] = df["quoteQty"].astype(float)
         df["commission"] = df["commission"].astype(float)
+
+        # แปลง isBuyer เป็น BUY / SELL
         df["side"] = df["isBuyer"].apply(lambda x: "BUY" if x else "SELL")
 
+        # ลบข้อมูลซ้ำ
         df.drop_duplicates(subset=["orderId", "time", "qty", "price"], inplace=True)
 
+        # เลือกคอลัมน์และตั้งชื่อใหม่
         df = df[["time", "side", "price", "qty", "quoteQty", "commission", "commissionAsset"]]
         df.rename(columns={
             "time": "Date",
@@ -106,6 +121,7 @@ with tab1:
         }, inplace=True)
 
         st.subheader(f"📊 สรุปผลรวม ({df['Date'].min().date()} - {df['Date'].max().date()})")
+
         buy = df[df["Type"] == "BUY"]
         total_buy_usdt = buy["Total (USDT)"].sum()
         total_buy_btc = buy["BTC Amount"].sum()
@@ -123,6 +139,7 @@ with tab1:
             st.metric("💰 กำไร/ขาดทุน (USDT)", f"{profit_loss:.2f} USDT")
 
         st.markdown("### 📈 กราฟราคาซื้อขาย")
+
         df["Date Only"] = df["Date"].dt.date
         price_chart = df.groupby(["Date Only", "Type"]).agg({
             "Price (USDT)": "mean",
@@ -151,6 +168,7 @@ with tab1:
         max_date = df["Date"].max().date()
         start_date = st.date_input("เริ่ม", min_value=min_date, max_value=max_date, value=min_date)
         end_date = st.date_input("ถึง", min_value=min_date, max_value=max_date, value=max_date)
+
         mask = (df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)
         filtered_df = df[mask]
 
@@ -160,11 +178,11 @@ with tab1:
     except Exception as e:
         st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
-# --- Tab 2: USDT/THB Trades Dashboard ---
+# ---------- Tab 2: USDT/THB Trades Dashboard ----------
 with tab2:
     st.title("💱 USDT/THB Trades Dashboard")
 
-    API_KEY_USDTTHB = os.getenv("API_KEY_USDTTHB") or API_KEY  # ใช้ API แยกหรือเดียวกันก็ได้
+    API_KEY_USDTTHB = os.getenv("API_KEY_USDTTHB") or API_KEY
     API_SECRET_USDTTHB = os.getenv("API_SECRET_USDTTHB") or API_SECRET
     BASE_URL = 'https://api.binance.th'
 
@@ -214,7 +232,7 @@ with tab2:
             timestamp = datetime.fromtimestamp(ts / 1000).strftime('%Y-%m-%d')
             quantity = float(order['origQty'])
 
-            # ราคาต่อหน่วยอาจมี 0 ต้องแก้ด้วยการใช้ cumulativeQuoteQty
+            # ราคาอาจ 0 ให้ลองใช้ cumulativeQuoteQty แทน
             if float(order.get('price', 0)) > 0:
                 price = float(order['price'])
             else:
@@ -251,23 +269,27 @@ with tab2:
             st.info("❗ ไม่มีประวัติการเทรด USDT/THB")
             st.stop()
 
-        min_date = datetime.fromtimestamp(min_ts / 1000).date()
-        max_date = datetime.fromtimestamp(max_ts / 1000).date()
+        min_date = datetime.fromtimestamp(min_ts / 1000).date() if min_ts else None
+        max_date = datetime.fromtimestamp(max_ts / 1000).date() if max_ts else None
 
-        # --- ย้ายกล่องสรุป Metrics ให้อยู่ก่อนแสดงช่วงวันที่ ---
-        col1, col2, col3 = st.columns(3)
-        col1.metric("จำนวน USDT ซื้อขาย", f"{total_qty:.4f}")
-        col2.metric("มูลค่าซื้อขายรวม (THB)", f"{total_cost:.2f}")
-        col3.metric("ค่าธรรมเนียมรวม", f"{total_fee:.4f}")
+        st.subheader(f"สรุป ({min_date} - {max_date})")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("จำนวน USDT ซื้อ", f"{total_qty:.4f}")
+        col2.metric("ซื้อรวม (THB)", f"{total_cost:.2f}")
+        avg_cost = total_cost / total_qty if total_qty > 0 else 0
+        col3.metric("ต้นทุนเฉลี่ย (THB)", f"{avg_cost:.2f}")
+        col4.metric("ค่าธรรมเนียมรวม (THB)", f"{total_fee:.4f}")
 
-        st.markdown("### เลือกช่วงวันที่สำหรับแสดงข้อมูล")
+        st.markdown("### รายการซื้อขาย USDT/THB")
+        st.dataframe(df_orders.sort_values(by='วันที่', ascending=False), use_container_width=True)
+
+        st.markdown("### เลือกช่วงวันที่")
         start_date = st.date_input("เริ่ม", min_value=min_date, max_value=max_date, value=min_date)
         end_date = st.date_input("ถึง", min_value=min_date, max_value=max_date, value=max_date)
 
-        mask = (pd.to_datetime(df_orders['วันที่']).dt.date >= start_date) & (pd.to_datetime(df_orders['วันที่']).dt.date <= end_date)
-        filtered_orders = df_orders.loc[mask]
+        filtered_orders = df_orders[
+            (pd.to_datetime(df_orders['วันที่']).dt.date >= start_date) &
+            (pd.to_datetime(df_orders['วันที่']).dt.date <= end_date)
+        ]
+        st.dataframe(filtered_orders.sort_values(by='วันที่', ascending=False), use_container_width=True)
 
-        st.markdown("### รายการซื้อขาย USDT/THB")
-        st.dataframe(filtered_orders.sort_values('วันที่', ascending=False), use_container_width=True)
-    else:
-        st.error("❌ ไม่สามารถดึงข้อมูลคำสั่งซื้อขาย USDT/THB ได้")
